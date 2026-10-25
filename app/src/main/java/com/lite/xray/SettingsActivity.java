@@ -2,7 +2,14 @@ package com.lite.xray;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.graphics.Typeface;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.widget.Toast;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.View;
@@ -43,6 +50,8 @@ public class SettingsActivity extends Activity {
         addRow("روش پینگ", () -> Settings.PING_NAMES[Settings.pingMethod(this)], this::pickPing);
         addRow("آدرس تست (برای تأخیر واقعی)", () -> Settings.pingUrl(this), this::pickUrl);
         addRow("زمان انتظار پینگ", () -> Settings.timeoutSec(this) + " ثانیه", this::pickTimeout);
+
+        addRow("عیب‌یابی سرور انتخاب‌شده", () -> "تست کامل اتصال و نمایش لاگ Xray", this::runDiag);
 
         TextView note = new TextView(this);
         note.setText("تغییرات DNS و MTU از اتصال بعدی اعمال می‌شود.");
@@ -153,6 +162,46 @@ public class SettingsActivity extends Activity {
                     d.dismiss();
                     refreshAll();
                 }).show();
+    }
+
+    private void runDiag() {
+        String sel = Store.selected(this);
+        String link = null;
+        for (Store.Server s : Store.servers(this)) {
+            if (s.id.equals(sel)) link = s.link;
+        }
+        if (link == null) {
+            Toast.makeText(this, "اول توی صفحه اصلی یک سرور انتخاب کن", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Toast.makeText(this, "در حال تست… چند ثانیه صبر کن", Toast.LENGTH_SHORT).show();
+        final String l = link;
+        final Context app = getApplicationContext();
+        final Handler ui = new Handler(Looper.getMainLooper());
+        new Thread(() -> {
+            final String out = Diag.run(app, l);
+            ui.post(() -> showText(out));
+        }).start();
+    }
+
+    private void showText(final String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(11);
+        t.setTypeface(Typeface.MONOSPACE);
+        t.setTextIsSelectable(true);
+        t.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        int p = (int) (16 * dp);
+        t.setPadding(p, p, p, p);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(t);
+        new AlertDialog.Builder(this).setTitle("نتیجه عیب‌یابی").setView(sv)
+                .setPositiveButton("کپی", (d, w) -> {
+                    ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(ClipData.newPlainText("diag", text));
+                    Toast.makeText(this, "کپی شد", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("بستن", null).show();
     }
 
     private interface Callback {

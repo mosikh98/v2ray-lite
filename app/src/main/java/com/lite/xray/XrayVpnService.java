@@ -73,7 +73,7 @@ public class XrayVpnService extends VpnService {
         if (!bin.exists()) throw new Exception("xray binary missing");
 
         ProcessBuilder pb = new ProcessBuilder(bin.getAbsolutePath(), "run", "-c", cf.getAbsolutePath());
-        pb.environment().put("XRAY_LOCATION_ASSET", dir.getAbsolutePath());
+        Net.env(pb, this);
         pb.redirectErrorStream(true);
         final Process p = pb.start();
         proc = p;

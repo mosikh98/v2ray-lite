@@ -149,19 +149,19 @@ final class Net {
             }
             File bin = new File(ctx.getApplicationInfo().nativeLibraryDir, "libxray.so");
             ProcessBuilder pb = new ProcessBuilder(bin.getAbsolutePath(), "run", "-c", cfg.getAbsolutePath());
-            pb.environment().put("XRAY_LOCATION_ASSET", ctx.getFilesDir().getAbsolutePath());
+            env(pb, ctx);
             pb.redirectErrorStream(true);
             pb.redirectOutput(ProcessBuilder.Redirect.to(log));
             p = pb.start();
 
             if (!waitPort(p, port, 4000)) {
-                lastError = "xray بالا نیومد: " + tail(log);
+                lastError = "xray بالا نیومد: " + tail(log, 400);
                 return -2;
             }
             long r = httpViaSocks(port, url, timeoutMs);
             if (r < 0) {
                 Thread.sleep(200);
-                lastError = lastError + " | " + tail(log);
+                lastError = lastError + " | " + tail(log, 400);
             }
             return r;
         } catch (Exception e) {
@@ -172,6 +172,14 @@ final class Net {
             if (cfg != null) cfg.delete();
             if (log != null) log.delete();
         }
+    }
+
+    /** environment for every xray child process */
+    static void env(ProcessBuilder pb, Context ctx) {
+        String dir = ctx.getFilesDir().getAbsolutePath();
+        pb.environment().put("XRAY_LOCATION_ASSET", dir);
+        pb.environment().put("HOME", dir);
+        pb.environment().put("TMPDIR", ctx.getCacheDir().getAbsolutePath());
     }
 
     /** waits until 127.0.0.1:port accepts connections (or the process dies / time runs out) */
@@ -189,9 +197,9 @@ final class Net {
         return false;
     }
 
-    private static String tail(File f) {
+    static String tail(File f, int max) {
         try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
-            byte[] b = new byte[(int) Math.min(f.length(), 400)];
+            byte[] b = new byte[(int) Math.min(f.length(), max)];
             long skip = f.length() - b.length;
             if (skip > 0) in.skip(skip);
             int n = in.read(b);
@@ -201,13 +209,13 @@ final class Net {
         }
     }
 
-    private static int freePort() throws IOException {
+    static int freePort() throws IOException {
         try (ServerSocket s = new ServerSocket(0)) {
             return s.getLocalPort();
         }
     }
 
-    private static long httpViaSocks(int port, String url, int timeoutMs) {
+    static long httpViaSocks(int port, String url, int timeoutMs) {
         try (Socket s = new Socket()) {
             URL u = new URL(url);
             String host = u.getHost();
