@@ -145,7 +145,7 @@ final class Net {
             ProcessBuilder pb = new ProcessBuilder(bin.getAbsolutePath(), "run", "-c", cfg.getAbsolutePath());
             pb.environment().put("XRAY_LOCATION_ASSET", ctx.getFilesDir().getAbsolutePath());
             pb.redirectErrorStream(true);
-            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            pb.redirectOutput(ProcessBuilder.Redirect.to(new File("/dev/null")));
             p = pb.start();
 
             long deadline = SystemClock.elapsedRealtime() + 4000;
