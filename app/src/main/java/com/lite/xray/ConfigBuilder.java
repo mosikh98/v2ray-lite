@@ -6,6 +6,8 @@ import android.util.Base64;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -15,6 +17,59 @@ final class ConfigBuilder {
     static final int SOCKS_PORT = 10808;
 
     private ConfigBuilder() {}
+
+
+    static boolean isIp(String s) {
+        return s.matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}") || s.contains(":");
+    }
+
+    /**
+     * Plain Xray on Android has no working system resolver, so the server domain is resolved here
+     * (Android resolver) and written into the config as an IP. SNI / Host keep the original domain.
+     * Must NOT be called on the main thread.
+     */
+    static String resolveServers(String json) throws Exception {
+        JSONObject root = new JSONObject(json);
+        JSONArray outs = root.optJSONArray("outbounds");
+        if (outs == null) return json;
+        for (int i = 0; i < outs.length(); i++) {
+            JSONObject o = outs.getJSONObject(i);
+            JSONObject st = o.optJSONObject("settings");
+            if (st == null) continue;
+            JSONObject target = null;
+            if (st.has("address") && st.has("port")) {
+                target = st;
+            } else {
+                JSONArray a = st.optJSONArray("vnext");
+                if (a == null) a = st.optJSONArray("servers");
+                if (a != null && a.length() > 0) target = a.getJSONObject(0);
+            }
+            if (target == null) continue;
+            String host = target.optString("address", "");
+            if (host.isEmpty() || isIp(host)) continue;
+
+            InetAddress[] all = InetAddress.getAllByName(host);
+            String ip = null;
+            for (InetAddress a : all) {
+                if (a instanceof Inet4Address) {
+                    ip = a.getHostAddress();
+                    break;
+                }
+            }
+            if (ip == null && all.length > 0) ip = all[0].getHostAddress();
+            if (ip == null) throw new Exception("cannot resolve " + host);
+            target.put("address", ip);
+
+            JSONObject ss = o.optJSONObject("streamSettings");
+            if (ss != null) {
+                for (String k : new String[]{"tlsSettings", "realitySettings"}) {
+                    JSONObject t = ss.optJSONObject(k);
+                    if (t != null && t.optString("serverName", "").isEmpty()) t.put("serverName", host);
+                }
+            }
+        }
+        return root.toString(2);
+    }
 
     static boolean isLink(String s) {
         return s.startsWith("vless://") || s.startsWith("vmess://")
@@ -215,6 +270,8 @@ final class ConfigBuilder {
         if (net.equals("splithttp")) net = "xhttp";
         String path = p.getOrDefault("path", "/");
         String host = p.getOrDefault("host", "");
+        // the server address is replaced by its IP before launch, so keep the domain as Host/SNI
+        if (host.isEmpty() && !isIp(addr)) host = addr;
         String sec = p.getOrDefault("security", "none");
 
         JSONObject ss = new JSONObject().put("network", net);

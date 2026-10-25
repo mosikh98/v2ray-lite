@@ -211,6 +211,10 @@ public class MainActivity extends Activity {
         Toast.makeText(this, m, Toast.LENGTH_SHORT).show();
     }
 
+    private void toastLong(String m) {
+        Toast.makeText(this, m, Toast.LENGTH_LONG).show();
+    }
+
     // ------------------------------------------------------------ list rows
 
     private View rowView(Store.Server s) {
@@ -289,6 +293,7 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------ connect
 
     private void onToggle() {
+        if (XrayVpnService.starting) return;
         if (XrayVpnService.running) {
             startService(new Intent(this, XrayVpnService.class).setAction("stop"));
             return;
@@ -331,11 +336,15 @@ public class MainActivity extends Activity {
 
     private void refresh() {
         boolean r = XrayVpnService.running;
-        btn.setText(r ? "قطع اتصال" : "اتصال");
+        boolean st = XrayVpnService.starting;
+        btn.setText(r ? "قطع اتصال" : st ? "در حال اتصال…" : "اتصال");
         String err = XrayVpnService.lastError;
+        String log = XrayVpnService.lastLog;
+        if (log.length() > 200) log = log.substring(log.length() - 200);
         Store.Server s = null;
         for (Store.Server x : servers) if (x.id.equals(selectedId)) s = x;
-        if (r) status.setText("متصل ✓  " + (s == null ? "" : s.name));
+        if (r) status.setText("متصل ✓  " + (s == null ? "" : s.name) + (log.isEmpty() ? "" : "\n" + log));
+        else if (st) status.setText("در حال اتصال…");
         else if (!err.isEmpty()) status.setText("خطا: " + err);
         else status.setText("قطع");
     }
@@ -380,8 +389,15 @@ public class MainActivity extends Activity {
     private void finishPing() {
         pinging = false;
         pingBtn.setText("پینگ");
-        for (Store.Server s : servers) if (s.ping == -3) s.ping = -1;
+        boolean any = false;
+        for (Store.Server s : servers) {
+            if (s.ping == -3) s.ping = -1;
+            if (s.ping >= 0) any = true;
+        }
         adapter.notifyDataSetChanged();
+        if (!any && !servers.isEmpty() && Settings.pingMethod(this) == 2 && !Net.lastError.isEmpty()) {
+            toastLong(Net.lastError);
+        }
     }
 
     private void pingOne(final Store.Server s) {
@@ -391,7 +407,12 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             long r = Net.ping(app, s.link);
             s.ping = r;
-            ui.post(() -> adapter.notifyDataSetChanged());
+            ui.post(() -> {
+                adapter.notifyDataSetChanged();
+                if (r < 0 && Settings.pingMethod(this) == 2 && !Net.lastError.isEmpty()) {
+                    toastLong(Net.lastError);
+                }
+            });
         }).start();
     }
 

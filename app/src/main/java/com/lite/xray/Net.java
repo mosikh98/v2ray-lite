@@ -26,6 +26,9 @@ import java.util.regex.Pattern;
 final class Net {
     private Net() {}
 
+    /** last failure reason of a real-delay test (diagnostics only) */
+    static volatile String lastError = "";
+
     // ---------------- subscriptions ----------------
 
     static String fetch(String url) throws IOException {
@@ -132,12 +135,15 @@ final class Net {
 
     /** Starts a throw-away xray on a free port and times an HTTP request through it. */
     private static long realDelay(Context ctx, String link, int timeoutMs, String url) {
-        File cfg = null;
+        File cfg = null, log = null;
         Process p = null;
         try {
+            lastError = "";
             int port = freePort();
             String json = ConfigBuilder.build(link, port, Settings.dnsList(ctx), false);
+            json = ConfigBuilder.resolveServers(json);
             cfg = new File(ctx.getCacheDir(), "t" + port + ".json");
+            log = new File(ctx.getCacheDir(), "t" + port + ".log");
             try (OutputStream o = new java.io.FileOutputStream(cfg)) {
                 o.write(json.getBytes(StandardCharsets.UTF_8));
             }
@@ -145,28 +151,53 @@ final class Net {
             ProcessBuilder pb = new ProcessBuilder(bin.getAbsolutePath(), "run", "-c", cfg.getAbsolutePath());
             pb.environment().put("XRAY_LOCATION_ASSET", ctx.getFilesDir().getAbsolutePath());
             pb.redirectErrorStream(true);
-            pb.redirectOutput(ProcessBuilder.Redirect.to(new File("/dev/null")));
+            pb.redirectOutput(ProcessBuilder.Redirect.to(log));
             p = pb.start();
 
-            long deadline = SystemClock.elapsedRealtime() + 4000;
-            boolean ready = false;
-            while (SystemClock.elapsedRealtime() < deadline) {
-                if (!p.isAlive()) return -2;
-                try (Socket s = new Socket()) {
-                    s.connect(new InetSocketAddress("127.0.0.1", port), 200);
-                    ready = true;
-                    break;
-                } catch (IOException e) {
-                    Thread.sleep(100);
-                }
+            if (!waitPort(p, port, 4000)) {
+                lastError = "xray بالا نیومد: " + tail(log);
+                return -2;
             }
-            if (!ready) return -2;
-            return httpViaSocks(port, url, timeoutMs);
+            long r = httpViaSocks(port, url, timeoutMs);
+            if (r < 0) {
+                Thread.sleep(200);
+                lastError = lastError + " | " + tail(log);
+            }
+            return r;
         } catch (Exception e) {
+            lastError = String.valueOf(e);
             return -2;
         } finally {
             if (p != null) p.destroyForcibly();
             if (cfg != null) cfg.delete();
+            if (log != null) log.delete();
+        }
+    }
+
+    /** waits until 127.0.0.1:port accepts connections (or the process dies / time runs out) */
+    static boolean waitPort(Process p, int port, int ms) throws InterruptedException {
+        long deadline = SystemClock.elapsedRealtime() + ms;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (!p.isAlive()) return false;
+            try (Socket s = new Socket()) {
+                s.connect(new InetSocketAddress("127.0.0.1", port), 200);
+                return true;
+            } catch (IOException e) {
+                Thread.sleep(100);
+            }
+        }
+        return false;
+    }
+
+    private static String tail(File f) {
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            byte[] b = new byte[(int) Math.min(f.length(), 400)];
+            long skip = f.length() - b.length;
+            if (skip > 0) in.skip(skip);
+            int n = in.read(b);
+            return n <= 0 ? "" : new String(b, 0, n, StandardCharsets.UTF_8).replace('\n', ' ').trim();
+        } catch (Exception e) {
+            return "";
         }
     }
 
@@ -210,7 +241,10 @@ final class Net {
 
             byte[] head = new byte[4];
             readFully(in, head, 4);
-            if (head[1] != 0) return -2;
+            if (head[1] != 0) {
+                lastError = "socks reply " + head[1];
+                return -2;
+            }
             int skip = head[3] == 1 ? 6 : head[3] == 4 ? 18 : 0;
             if (head[3] == 3) skip = (in.read() & 0xff) + 2;
             readFully(in, new byte[skip], skip);
@@ -223,9 +257,13 @@ final class Net {
             StringBuilder line = new StringBuilder();
             int ch;
             while ((ch = in.read()) != -1 && ch != '\n' && line.length() < 200) line.append((char) ch);
-            if (!line.toString().startsWith("HTTP/1.")) return -2;
+            if (!line.toString().startsWith("HTTP/1.")) {
+                lastError = "پاسخ نامعتبر: " + line;
+                return -2;
+            }
             return SystemClock.elapsedRealtime() - t0;
         } catch (Exception e) {
+            lastError = "http: " + e;
             return -2;
         }
     }

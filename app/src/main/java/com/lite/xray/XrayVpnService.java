@@ -18,9 +18,11 @@ public class XrayVpnService extends VpnService {
     private static final String TAG = "XrayLite";
 
     static volatile boolean running = false;
+    static volatile boolean starting = false;
     static volatile String lastError = "";
     static volatile String lastLog = "";
 
+    private volatile boolean cancel = false;
     private Process proc;
     private ParcelFileDescriptor tun;
     private boolean tunnelStarted = false;
@@ -31,20 +33,28 @@ public class XrayVpnService extends VpnService {
             stopAll();
             return START_NOT_STICKY;
         }
-        if (running) return START_NOT_STICKY;
-        String cfg = in == null ? null : in.getStringExtra("cfg");
+        if (running || starting) return START_NOT_STICKY;
+        final String cfg = in == null ? null : in.getStringExtra("cfg");
         if (cfg == null) {
             stopSelf();
             return START_NOT_STICKY;
         }
         lastError = "";
-        try {
-            startAll(cfg);
-        } catch (Throwable e) {
-            Log.e(TAG, "start failed", e);
-            lastError = String.valueOf(e.getMessage());
-            stopAll();
-        }
+        lastLog = "";
+        cancel = false;
+        starting = true;
+        // DNS lookup + waiting for xray must not block the main thread
+        new Thread(() -> {
+            try {
+                startAll(cfg);
+            } catch (Throwable e) {
+                Log.e(TAG, "start failed", e);
+                lastError = String.valueOf(e.getMessage());
+                new Handler(Looper.getMainLooper()).post(this::stopAll);
+            } finally {
+                starting = false;
+            }
+        }, "xray-start").start();
         return START_NOT_STICKY;
     }
 
@@ -54,7 +64,10 @@ public class XrayVpnService extends VpnService {
 
         File dir = getFilesDir();
         File cf = new File(dir, "config.json");
-        write(cf, ConfigBuilder.build(cfg, ConfigBuilder.SOCKS_PORT, dns, true));
+        String json = ConfigBuilder.build(cfg, ConfigBuilder.SOCKS_PORT, dns, true);
+        json = ConfigBuilder.resolveServers(json);
+        write(cf, json);
+        if (cancel) throw new Exception("cancelled");
 
         File bin = new File(getApplicationInfo().nativeLibraryDir, "libxray.so");
         if (!bin.exists()) throw new Exception("xray binary missing");
@@ -62,8 +75,8 @@ public class XrayVpnService extends VpnService {
         ProcessBuilder pb = new ProcessBuilder(bin.getAbsolutePath(), "run", "-c", cf.getAbsolutePath());
         pb.environment().put("XRAY_LOCATION_ASSET", dir.getAbsolutePath());
         pb.redirectErrorStream(true);
-        proc = pb.start();
-        final Process p = proc;
+        final Process p = pb.start();
+        proc = p;
 
         new Thread(() -> {
             try (BufferedReader r = new BufferedReader(
@@ -81,8 +94,10 @@ public class XrayVpnService extends VpnService {
             }
         }, "xray-log").start();
 
-        Thread.sleep(700);
-        if (!p.isAlive()) throw new Exception("xray exited: " + lastLog);
+        if (!Net.waitPort(p, ConfigBuilder.SOCKS_PORT, 5000)) {
+            throw new Exception("xray did not start: " + lastLog);
+        }
+        if (cancel) throw new Exception("cancelled");
 
         Builder b = new Builder()
                 .setSession("XrayLite")
@@ -94,6 +109,7 @@ public class XrayVpnService extends VpnService {
         b.addDisallowedApplication(getPackageName());
         tun = b.establish();
         if (tun == null) throw new Exception("VPN permission missing");
+        if (cancel) throw new Exception("cancelled");
 
         File yaml = new File(dir, "tun.yml");
         write(yaml, "tunnel:\n"
@@ -112,6 +128,7 @@ public class XrayVpnService extends VpnService {
     }
 
     private synchronized void stopAll() {
+        cancel = true;
         running = false;
         if (tunnelStarted) {
             try {
