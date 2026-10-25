@@ -1,0 +1,70 @@
+/*
+ * Replacement for hev-socks5-tunnel's own hev-jni.c.
+ * CI copies this file over the upstream one (placeholder @HEV_MAIN@ is filled in),
+ * so the JNI class/method names are exactly ours: com.lite.xray.Tun.
+ * Plain JNI naming is used (no JNI_OnLoad / RegisterNatives).
+ */
+#include <jni.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+extern int @HEV_MAIN@ (const char *config_path, int tun_fd);
+extern void hev_socks5_tunnel_quit (void);
+
+typedef struct {
+    char *path;
+    int fd;
+} Args;
+
+static volatile int running = 0;
+
+static void *
+worker (void *data)
+{
+    Args *a = (Args *)data;
+    @HEV_MAIN@ (a->path, a->fd);
+    free (a->path);
+    free (a);
+    running = 0;
+    return NULL;
+}
+
+JNIEXPORT void JNICALL
+Java_com_lite_xray_Tun_start (JNIEnv *env, jclass clazz, jstring path, jint fd)
+{
+    pthread_t th;
+    const char *s;
+    Args *a;
+
+    if (running)
+        return;
+
+    s = (*env)->GetStringUTFChars (env, path, NULL);
+    a = (Args *)malloc (sizeof (Args));
+    a->path = strdup (s);
+    a->fd = fd;
+    (*env)->ReleaseStringUTFChars (env, path, s);
+
+    running = 1;
+    if (pthread_create (&th, NULL, worker, a) != 0) {
+        running = 0;
+        free (a->path);
+        free (a);
+        return;
+    }
+    pthread_detach (th);
+}
+
+JNIEXPORT void JNICALL
+Java_com_lite_xray_Tun_stop (JNIEnv *env, jclass clazz)
+{
+    int i;
+
+    if (!running)
+        return;
+    hev_socks5_tunnel_quit ();
+    for (i = 0; i < 60 && running; i++)
+        usleep (50000);
+}

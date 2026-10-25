@@ -25,13 +25,34 @@ jobs:
           cp /tmp/xray/xray app/src/main/jniLibs/arm64-v8a/libxray.so
           chmod +x app/src/main/jniLibs/arm64-v8a/libxray.so
 
-      - name: Build tun2socks (hev-socks5-tunnel)
+      - name: Build tun2socks (hev-socks5-tunnel + our JNI shim)
         run: |
           NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
-          git clone --recursive --depth 1 \
-            https://github.com/heiher/hev-socks5-tunnel native/jni/hev-socks5-tunnel
+          HEV=native/jni/hev-socks5-tunnel
+          git clone --recursive --depth 1 https://github.com/heiher/hev-socks5-tunnel "$HEV"
+
+          # which entry point does this hev version export?
+          if grep -rqs "hev_socks5_tunnel_main_from_file" "$HEV/src"; then
+            M=hev_socks5_tunnel_main_from_file
+          else
+            M=hev_socks5_tunnel_main
+          fi
+          echo "entry point: $M"
+          grep -rn "hev_socks5_tunnel_quit" "$HEV/src" | head -5 || true
+
+          # replace upstream JNI glue with ours
+          FILES=$(find "$HEV" -name hev-jni.c)
+          echo "jni files: $FILES"
+          test -n "$FILES"
+          for f in $FILES; do
+            sed "s/@HEV_MAIN@/$M/g" native/hev-jni.c.in > "$f"
+          done
+
           "$NDK/ndk-build" -C native
           cp native/libs/arm64-v8a/libhev-socks5-tunnel.so app/src/main/jniLibs/arm64-v8a/
+          # sanity: our symbols must be exported
+          NM=$(find "$NDK" -name llvm-nm -type f | head -1)
+          "$NM" -D app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so | grep Java_com_lite_xray_Tun || echo "WARNING: JNI symbols not found by nm"
 
       - uses: gradle/actions/setup-gradle@v4
         with:

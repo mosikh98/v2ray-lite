@@ -16,7 +16,16 @@ final class ConfigBuilder {
 
     private ConfigBuilder() {}
 
+    static boolean isLink(String s) {
+        return s.startsWith("vless://") || s.startsWith("vmess://")
+                || s.startsWith("trojan://") || s.startsWith("ss://");
+    }
+
     static String build(String input) throws Exception {
+        return build(input, SOCKS_PORT, new String[]{"1.1.1.1", "8.8.8.8"}, true);
+    }
+
+    static String build(String input, int port, String[] dns, boolean sniff) throws Exception {
         String s = input == null ? "" : input.trim();
         if (s.isEmpty()) throw new Exception("empty config");
 
@@ -27,26 +36,70 @@ final class ConfigBuilder {
             s = s.split("\\r?\\n")[0].trim();
             root = new JSONObject();
             root.put("log", new JSONObject().put("loglevel", "warning"));
-            root.put("dns", new JSONObject().put("servers", new JSONArray().put("1.1.1.1").put("8.8.8.8")));
+            JSONArray ds = new JSONArray();
+            for (String d : dns) ds.put(d);
+            root.put("dns", new JSONObject().put("servers", ds));
             JSONArray outs = new JSONArray();
             outs.put(parseLink(s));
             outs.put(new JSONObject().put("tag", "direct").put("protocol", "freedom"));
             root.put("outbounds", outs);
         }
-        root.put("inbounds", new JSONArray().put(socksInbound()));
+        root.put("inbounds", new JSONArray().put(socksInbound(port, sniff)));
         return root.toString(2);
     }
 
-    private static JSONObject socksInbound() throws Exception {
-        return new JSONObject()
+    /** Display name of a link / JSON config. */
+    static String name(String link) {
+        try {
+            String s = link.trim();
+            if (s.startsWith("{")) return new JSONObject(s).optString("remarks", "JSON");
+            if (s.startsWith("vmess://")) {
+                String ps = new JSONObject(b64(s.substring(8).trim())).optString("ps", "");
+                if (!ps.isEmpty()) return ps;
+            } else {
+                String f = Uri.parse(s).getFragment();
+                if (f != null && !f.isEmpty()) return f;
+            }
+            String[] ep = endpoint(s);
+            if (ep != null) return ep[0] + ":" + ep[1];
+        } catch (Exception ignored) {
+        }
+        return "server";
+    }
+
+    /** {host, port} of the first proxy outbound, or null. */
+    static String[] endpoint(String link) throws Exception {
+        JSONArray outs = new JSONObject(build(link)).optJSONArray("outbounds");
+        if (outs == null) return null;
+        for (int i = 0; i < outs.length(); i++) {
+            JSONObject st = outs.getJSONObject(i).optJSONObject("settings");
+            if (st == null) continue;
+            if (st.has("address") && st.has("port")) {
+                return new String[]{st.getString("address"), String.valueOf(st.getInt("port"))};
+            }
+            JSONArray a = st.optJSONArray("vnext");
+            if (a == null) a = st.optJSONArray("servers");
+            if (a != null && a.length() > 0) {
+                JSONObject e = a.getJSONObject(0);
+                return new String[]{e.getString("address"), String.valueOf(e.getInt("port"))};
+            }
+        }
+        return null;
+    }
+
+    private static JSONObject socksInbound(int port, boolean sniff) throws Exception {
+        JSONObject in = new JSONObject()
                 .put("tag", "socks-in")
                 .put("listen", "127.0.0.1")
-                .put("port", SOCKS_PORT)
+                .put("port", port)
                 .put("protocol", "socks")
-                .put("settings", new JSONObject().put("udp", true).put("auth", "noauth"))
-                .put("sniffing", new JSONObject()
-                        .put("enabled", true)
-                        .put("destOverride", new JSONArray().put("http").put("tls")));
+                .put("settings", new JSONObject().put("udp", true).put("auth", "noauth"));
+        if (sniff) {
+            in.put("sniffing", new JSONObject()
+                    .put("enabled", true)
+                    .put("destOverride", new JSONArray().put("http").put("tls")));
+        }
+        return in;
     }
 
     private static JSONObject parseLink(String s) throws Exception {
@@ -202,7 +255,7 @@ final class ConfigBuilder {
                 break;
             }
             case "tcp": {
-                if ("http".equals(p.get("headerType"))) {
+                if ("http".equals(p.get("headerType")) && !"reality".equals(sec)) {
                     JSONObject req = new JSONObject().put("path", new JSONArray().put(path));
                     if (!host.isEmpty()) {
                         req.put("headers", new JSONObject().put("Host", new JSONArray().put(host)));
@@ -244,8 +297,8 @@ final class ConfigBuilder {
         return s != null && !s.isEmpty();
     }
 
-    private static String b64(String s) {
-        s = s.replace('-', '+').replace('_', '/').trim();
+    static String b64(String s) {
+        s = s.replaceAll("\\s", "").replace('-', '+').replace('_', '/');
         while (s.length() % 4 != 0) s += "=";
         return new String(Base64.decode(s, Base64.DEFAULT), StandardCharsets.UTF_8);
     }
