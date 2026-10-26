@@ -25,7 +25,15 @@ final class Diag {
                 .append(", abi ").append(Build.SUPPORTED_ABIS[0]).append('\n');
         sb.append("xray file: ").append(bin.exists() ? bin.length() + " bytes" : "MISSING")
                 .append(", exec=").append(bin.canExecute()).append('\n');
-        sb.append("xray version: ").append(version(ctx, bin)).append("\n\n");
+        sb.append("xray version: ").append(version(ctx, bin)).append('\n');
+        sb.append("fragment mode: ").append(Settings.frag(ctx).mode).append('\n');
+        String enc = android.net.Uri.parse(link.trim()).getQueryParameter("encryption");
+        if (enc != null && !enc.equals("none")) {
+            int dot = enc.indexOf('.', enc.indexOf('.') + 1);
+            sb.append("vless encryption: ").append(dot > 0 ? enc.substring(0, Math.min(enc.length(), dot + 6)) : "?")
+                    .append("... (len ").append(enc.length()).append(")\n");
+        }
+        sb.append('\n');
 
         String[] ep = null;
         try {
@@ -49,7 +57,7 @@ final class Diag {
         Process p = null;
         try {
             int port = Net.freePort();
-            String json = ConfigBuilder.build(link, port, Settings.dnsList(ctx), false);
+            String json = ConfigBuilder.build(link, port, Settings.dnsList(ctx), false, Settings.frag(ctx));
             json = ConfigBuilder.resolveServers(json);
             JSONObject root = new JSONObject(json);
             root.getJSONObject("log").put("loglevel", "info");

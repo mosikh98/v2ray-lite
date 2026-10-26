@@ -140,7 +140,7 @@ final class Net {
         try {
             lastError = "";
             int port = freePort();
-            String json = ConfigBuilder.build(link, port, Settings.dnsList(ctx), false);
+            String json = ConfigBuilder.build(link, port, Settings.dnsList(ctx), false, Settings.frag(ctx));
             json = ConfigBuilder.resolveServers(json);
             cfg = new File(ctx.getCacheDir(), "t" + port + ".json");
             log = new File(ctx.getCacheDir(), "t" + port + ".log");

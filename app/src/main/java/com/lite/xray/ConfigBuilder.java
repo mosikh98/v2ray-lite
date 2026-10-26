@@ -81,6 +81,11 @@ final class ConfigBuilder {
     }
 
     static String build(String input, int port, String[] dns, boolean sniff) throws Exception {
+        return build(input, port, dns, sniff, null);
+    }
+
+    static String build(String input, int port, String[] dns, boolean sniff, Settings.Frag frag)
+            throws Exception {
         String s = input == null ? "" : input.trim();
         if (s.isEmpty()) throw new Exception("empty config");
 
@@ -99,8 +104,48 @@ final class ConfigBuilder {
             outs.put(new JSONObject().put("tag", "direct").put("protocol", "freedom"));
             root.put("outbounds", outs);
         }
+        applyFragment(root, frag);
         root.put("inbounds", new JSONArray().put(socksInbound(port, sniff)));
         return root.toString(2);
+    }
+
+    /**
+     * Fragment = a "freedom" outbound with fragment settings used as dialerProxy of the proxy outbound.
+     * Fragment-in-fragment = two such outbounds chained: proxy -> frag2 (outer) -> frag1 (inner).
+     */
+    private static void applyFragment(JSONObject root, Settings.Frag f) throws Exception {
+        if (f == null || f.mode == 0) return;
+        JSONArray outs = root.optJSONArray("outbounds");
+        if (outs == null || outs.length() == 0) return;
+        JSONObject proxy = null;
+        for (int i = 0; i < outs.length(); i++) {
+            if ("proxy".equals(outs.getJSONObject(i).optString("tag"))) proxy = outs.getJSONObject(i);
+        }
+        if (proxy == null) proxy = outs.getJSONObject(0);
+
+        JSONObject ss = proxy.optJSONObject("streamSettings");
+        if (ss == null) ss = new JSONObject();
+        JSONObject sock = ss.optJSONObject("sockopt");
+        if (sock == null) sock = new JSONObject();
+        sock.put("dialerProxy", f.mode == 2 ? "frag2" : "frag1");
+        ss.put("sockopt", sock);
+        proxy.put("streamSettings", ss);
+
+        if (f.mode == 2) outs.put(fragOutbound("frag2", f.l2, "frag1"));
+        outs.put(fragOutbound("frag1", f.l1, null));
+    }
+
+    private static JSONObject fragOutbound(String tag, String[] v, String dialer) throws Exception {
+        JSONObject o = new JSONObject()
+                .put("tag", tag)
+                .put("protocol", "freedom")
+                .put("settings", new JSONObject().put("fragment", new JSONObject()
+                        .put("packets", v[0]).put("length", v[1]).put("interval", v[2])));
+        if (dialer != null) {
+            o.put("streamSettings", new JSONObject()
+                    .put("sockopt", new JSONObject().put("dialerProxy", dialer)));
+        }
+        return o;
     }
 
     /** Display name of a link / JSON config. */
@@ -340,12 +385,14 @@ final class ConfigBuilder {
             ss.put("tlsSettings", t);
         } else if (sec.equals("reality")) {
             ss.put("security", "reality");
-            ss.put("realitySettings", new JSONObject()
+            JSONObject rs = new JSONObject()
                     .put("serverName", sni)
                     .put("fingerprint", nonEmpty(p.get("fp")) ? p.get("fp") : "chrome")
                     .put("publicKey", p.getOrDefault("pbk", ""))
                     .put("shortId", p.getOrDefault("sid", ""))
-                    .put("spiderX", p.getOrDefault("spx", "")));
+                    .put("spiderX", p.getOrDefault("spx", ""));
+            if (nonEmpty(p.get("pqv"))) rs.put("mldsa65Verify", p.get("pqv"));
+            ss.put("realitySettings", rs);
         }
         return ss;
     }

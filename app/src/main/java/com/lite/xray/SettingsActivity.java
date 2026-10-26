@@ -51,6 +51,22 @@ public class SettingsActivity extends Activity {
         addRow("آدرس تست (برای تأخیر واقعی)", () -> Settings.pingUrl(this), this::pickUrl);
         addRow("زمان انتظار پینگ", () -> Settings.timeoutSec(this) + " ثانیه", this::pickTimeout);
 
+        header("فرگمنت");
+        addRow("حالت فرگمنت", () -> Settings.FRAG_MODES[Settings.getInt(this, "frag_mode", 0)], this::pickFragMode);
+        addRow("لایه داخلی — packets", () -> Settings.getStr(this, "f1_packets", Settings.F1_DEF[0]),
+                () -> pickPreset("لایه داخلی — packets", "f1_packets", Settings.FRAG_PACKETS, Settings.F1_DEF[0]));
+        addRow("لایه داخلی — length", () -> Settings.getStr(this, "f1_length", Settings.F1_DEF[1]),
+                () -> pickPreset("لایه داخلی — length", "f1_length", Settings.FRAG_LENGTHS, Settings.F1_DEF[1]));
+        addRow("لایه داخلی — interval (ms)", () -> Settings.getStr(this, "f1_interval", Settings.F1_DEF[2]),
+                () -> pickPreset("لایه داخلی — interval", "f1_interval", Settings.FRAG_INTERVALS, Settings.F1_DEF[2]));
+        addRow("لایه بیرونی (فقط دولایه) — packets", () -> Settings.getStr(this, "f2_packets", Settings.F2_DEF[0]),
+                () -> pickPreset("لایه بیرونی — packets", "f2_packets", Settings.FRAG_PACKETS, Settings.F2_DEF[0]));
+        addRow("لایه بیرونی (فقط دولایه) — length", () -> Settings.getStr(this, "f2_length", Settings.F2_DEF[1]),
+                () -> pickPreset("لایه بیرونی — length", "f2_length", Settings.FRAG_LENGTHS, Settings.F2_DEF[1]));
+        addRow("لایه بیرونی (فقط دولایه) — interval (ms)", () -> Settings.getStr(this, "f2_interval", Settings.F2_DEF[2]),
+                () -> pickPreset("لایه بیرونی — interval", "f2_interval", Settings.FRAG_INTERVALS, Settings.F2_DEF[2]));
+
+        header("ابزار");
         addRow("عیب‌یابی سرور انتخاب‌شده", () -> "تست کامل اتصال و نمایش لاگ Xray", this::runDiag);
 
         TextView note = new TextView(this);
@@ -79,6 +95,46 @@ public class SettingsActivity extends Activity {
         Runnable ref = () -> v.setText(value.get());
         refreshers.add(ref);
         ref.run();
+    }
+
+    private void header(String t) {
+        TextView h = new TextView(this);
+        h.setText(t);
+        h.setTextSize(13);
+        h.setAlpha(0.6f);
+        h.setPadding(0, (int) (20 * dp), 0, 0);
+        root.addView(h);
+    }
+
+    private void pickFragMode() {
+        new AlertDialog.Builder(this).setTitle("حالت فرگمنت")
+                .setSingleChoiceItems(Settings.FRAG_MODES, Settings.getInt(this, "frag_mode", 0), (d, w) -> {
+                    Settings.putInt(this, "frag_mode", w);
+                    d.dismiss();
+                    refreshAll();
+                }).show();
+    }
+
+    private void pickPreset(final String title, final String key, String[] presets, String def) {
+        final String cur = Settings.getStr(this, key, def);
+        final String[] items = new String[presets.length + 1];
+        System.arraycopy(presets, 0, items, 0, presets.length);
+        items[presets.length] = "سفارشی";
+        int checked = items.length - 1;
+        for (int i = 0; i < presets.length; i++) if (presets[i].equals(cur)) checked = i;
+        new AlertDialog.Builder(this).setTitle(title)
+                .setSingleChoiceItems(items, checked, (d, w) -> {
+                    d.dismiss();
+                    if (w == items.length - 1) {
+                        input(title, "مثلاً 10-20", cur, v -> {
+                            Settings.putStr(this, key, v);
+                            refreshAll();
+                        });
+                    } else {
+                        Settings.putStr(this, key, items[w]);
+                        refreshAll();
+                    }
+                }).show();
     }
 
     private void refreshAll() {

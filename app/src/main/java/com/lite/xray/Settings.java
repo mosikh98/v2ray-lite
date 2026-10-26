@@ -45,6 +45,52 @@ final class Settings {
 
     static final int[] TIMEOUTS = {2, 3, 5, 8, 10};
 
+    // ----- fragment -----
+    static final String[] FRAG_MODES = {
+            "خاموش",
+            "فرگمنت (تک‌لایه)",
+            "فرگمنت در فرگمنت (دولایه)"};
+    static final String[] FRAG_PACKETS = {"tlshello", "1-1", "1-2", "1-3", "1-5"};
+    static final String[] FRAG_LENGTHS = {"1-3", "10-20", "20-50", "50-100", "100-200", "200-400"};
+    static final String[] FRAG_INTERVALS = {"1-1", "1-5", "5-10", "10-20", "20-50", "50-100"};
+    static final String[] F1_DEF = {"tlshello", "100-200", "10-20"}; // inner layer
+    static final String[] F2_DEF = {"tlshello", "10-20", "5-10"};    // outer layer
+
+    static final class Frag {
+        int mode;
+        String[] l1; // inner  {packets, length, interval}
+        String[] l2; // outer
+    }
+
+    static Frag frag(Context c) {
+        Frag f = new Frag();
+        f.mode = Math.max(0, Math.min(2, sp(c).getInt("frag_mode", 0)));
+        f.l1 = layer(c, "f1_", F1_DEF);
+        f.l2 = layer(c, "f2_", F2_DEF);
+        return f;
+    }
+
+    private static String[] layer(Context c, String pre, String[] def) {
+        return new String[]{
+                clean(sp(c).getString(pre + "packets", def[0]), def[0], true),
+                clean(sp(c).getString(pre + "length", def[1]), def[1], false),
+                clean(sp(c).getString(pre + "interval", def[2]), def[2], false)};
+    }
+
+    private static String clean(String v, String def, boolean packets) {
+        v = v == null ? "" : v.trim().toLowerCase();
+        if (packets && v.equals("tlshello")) return v;
+        return v.matches("[0-9]+(-[0-9]+)?") ? v : def;
+    }
+
+    static String getStr(Context c, String k, String def) {
+        return sp(c).getString(k, def);
+    }
+
+    static int getInt(Context c, String k, int def) {
+        return sp(c).getInt(k, def);
+    }
+
     private static SharedPreferences sp(Context c) {
         return c.getSharedPreferences("settings", Context.MODE_PRIVATE);
     }

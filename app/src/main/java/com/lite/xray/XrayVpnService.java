@@ -64,7 +64,7 @@ public class XrayVpnService extends VpnService {
 
         File dir = getFilesDir();
         File cf = new File(dir, "config.json");
-        String json = ConfigBuilder.build(cfg, ConfigBuilder.SOCKS_PORT, dns, true);
+        String json = ConfigBuilder.build(cfg, ConfigBuilder.SOCKS_PORT, dns, true, Settings.frag(this));
         json = ConfigBuilder.resolveServers(json);
         write(cf, json);
         if (cancel) throw new Exception("cancelled");

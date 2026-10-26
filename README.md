@@ -7,6 +7,8 @@
 - لینک `vless://` `vmess://` `trojan://` `ss://` یا JSON کامل Xray
 - تنظیمات: DNS (لیست آماده + سفارشی)، MTU، روش پینگ (TCP / ICMP / تأخیر واقعی)، آدرس تست، timeout
 - مرتب‌سازی بر اساس پینگ
+- فرگمنت و «فرگمنت در فرگمنت» (دو outbound از نوع freedom که با dialerProxy زنجیر میشن)
+- پشتیبانی از VLESS Encryption (رشته‌ی mlkem768x25519plus... بدون تغییر به Xray داده میشه) و `pqv` برای reality
 
 مسیر ترافیک: VpnService → hev-socks5-tunnel → Xray (SOCKS 127.0.0.1:10808) → سرور.
 
