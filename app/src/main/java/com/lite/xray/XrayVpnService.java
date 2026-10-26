@@ -97,6 +97,7 @@ public class XrayVpnService extends VpnService {
         if (!Net.waitPort(p, ConfigBuilder.SOCKS_PORT, 5000)) {
             throw new Exception("xray did not start: " + lastLog);
         }
+        Monitor.xrayPid = Monitor.findPid("libxray.so", "config.json");
         if (cancel) throw new Exception("cancelled");
 
         Builder b = new Builder()
@@ -129,6 +130,7 @@ public class XrayVpnService extends VpnService {
 
     private synchronized void stopAll() {
         cancel = true;
+        Monitor.xrayPid = 0;
         running = false;
         if (tunnelStarted) {
             try {

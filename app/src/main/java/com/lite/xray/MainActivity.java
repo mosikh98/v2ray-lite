@@ -11,6 +11,7 @@ import android.net.VpnService;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.graphics.Typeface;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -44,7 +45,8 @@ public class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private BaseAdapter adapter;
     private Button btn, pingBtn;
-    private TextView status;
+    private TextView status, mon;
+    private final Monitor monitor = new Monitor();
     private String selectedId = "";
     private ExecutorService pingPool;
     private boolean pinging = false;
@@ -83,6 +85,16 @@ public class MainActivity extends Activity {
         bar.addView(sortBtn);
         bar.addView(setBtn);
         root.addView(bar);
+
+        mon = new TextView(this);
+        mon.setTextSize(12);
+        mon.setTypeface(Typeface.MONOSPACE);
+        mon.setSingleLine(true);
+        mon.setAlpha(0.75f);
+        mon.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        mon.setPadding(pad / 2, pad / 2, pad / 2, pad / 2);
+        mon.setText("CPU —   RAM —");
+        root.addView(mon);
 
         ListView list = new ListView(this);
         adapter = new BaseAdapter() {
@@ -335,6 +347,7 @@ public class MainActivity extends Activity {
     }
 
     private void refresh() {
+        mon.setText(monitor.sample());
         boolean r = XrayVpnService.running;
         boolean st = XrayVpnService.starting;
         btn.setText(r ? "قطع اتصال" : st ? "در حال اتصال…" : "اتصال");
