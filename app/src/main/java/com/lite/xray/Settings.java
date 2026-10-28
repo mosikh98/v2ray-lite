@@ -43,8 +43,6 @@ final class Settings {
             "http://detectportal.firefox.com/success.txt",
             ""};
 
-    static final int[] TIMEOUTS = {2, 3, 5, 8, 10};
-
     // ----- fragment -----
     static final String[] FRAG_MODES = {
             "خاموش",
@@ -105,7 +103,7 @@ final class Settings {
 
     // ----- DNS -----
     static int dnsIndex(Context c) {
-        int i = sp(c).getInt("dns", 0);
+        int i = sp(c).getInt("dns", 1);
         return (i < 0 || i >= DNS_NAMES.length) ? 0 : i;
     }
 
@@ -121,7 +119,7 @@ final class Settings {
                 if (p.matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}")) ok.add(p);
             }
             if (!ok.isEmpty()) return ok.toArray(new String[0]);
-            return DNS_IPS[0];
+            return DNS_IPS[1];
         }
         return DNS_IPS[i];
     }
@@ -138,8 +136,8 @@ final class Settings {
     }
 
     static int urlIndex(Context c) {
-        int i = sp(c).getInt("ping_url", 0);
-        return (i < 0 || i >= URL_NAMES.length) ? 0 : i;
+        int i = sp(c).getInt("ping_url", 1);
+        return (i < 0 || i >= URL_NAMES.length) ? 1 : i;
     }
 
     static String urlCustom(Context c) {
@@ -149,13 +147,10 @@ final class Settings {
     static String pingUrl(Context c) {
         int i = urlIndex(c);
         String u = (i == URL_NAMES.length - 1) ? urlCustom(c).trim() : URLS[i];
-        if (u.isEmpty()) u = URLS[0];
+        if (u.isEmpty()) u = URLS[1];
         if (u.startsWith("https://")) u = "http://" + u.substring(8);
         if (!u.startsWith("http://")) u = "http://" + u;
         return u;
     }
 
-    static int timeoutSec(Context c) {
-        return sp(c).getInt("ping_timeout", 5);
-    }
 }

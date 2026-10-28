@@ -77,7 +77,7 @@ final class ConfigBuilder {
     }
 
     static String build(String input) throws Exception {
-        return build(input, SOCKS_PORT, new String[]{"1.1.1.1", "8.8.8.8"}, true);
+        return build(input, SOCKS_PORT, new String[]{"8.8.8.8", "8.8.4.4"}, true);
     }
 
     static String build(String input, int port, String[] dns, boolean sniff) throws Exception {
@@ -344,7 +344,18 @@ final class ConfigBuilder {
             case "xhttp": {
                 JSONObject w = new JSONObject().put("path", path);
                 if (!host.isEmpty()) w.put("host", host);
-                if (p.containsKey("mode")) w.put("mode", p.get("mode"));
+                String mode = p.get("mode");
+                if (nonEmpty(mode)) w.put("mode", "packet".equals(mode) ? "packet-up" : mode);
+                // share links carry the client-side tuning (padding, headers, xmux ...) as URL-encoded JSON;
+                // it must match the server or the server answers 400
+                String ex = p.get("extra");
+                if (nonEmpty(ex)) {
+                    try {
+                        if (ex.startsWith("%")) ex = Uri.decode(ex);
+                        w.put("extra", new JSONObject(ex));
+                    } catch (Exception ignored) {
+                    }
+                }
                 ss.put("xhttpSettings", w);
                 break;
             }

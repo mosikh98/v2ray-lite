@@ -84,48 +84,66 @@ final class Net {
 
     // ---------------- ping ----------------
 
-    /** @return ms (>=0) or -2 on failure */
+    /** 5 tries, each limited to 1 s (so <= 5 s in total); the result is the average of the successful tries. */
+    static final int TRIES = 5;
+    static final int TRY_MS = 1000;
+
+    /** @return average ms (>=0) or -2 on failure */
     static long ping(Context ctx, String link) {
         try {
             int method = Settings.pingMethod(ctx);
-            int to = Settings.timeoutSec(ctx) * 1000;
-            if (method == 2) return realDelay(ctx, link, to, Settings.pingUrl(ctx));
+            if (method == 2) return realDelay(ctx, link, Settings.pingUrl(ctx));
             String[] ep = ConfigBuilder.endpoint(link);
             if (ep == null) return -2;
-            return method == 0 ? tcp(ep[0], Integer.parseInt(ep[1]), to) : icmp(ep[0], to);
+            int port = Integer.parseInt(ep[1]);
+            return method == 0 ? tcpAvg(ep[0], port) : icmpAvg(ep[0]);
         } catch (Throwable e) {
             return -2;
         }
     }
 
-    private static long tcp(String host, int port, int timeoutMs) {
+    private static long average(List<Long> v) {
+        if (v.isEmpty()) return -2;
+        long sum = 0;
+        for (long x : v) sum += x;
+        return Math.round(sum / (double) v.size());
+    }
+
+    private static long tcpAvg(String host, int port) {
+        InetAddress a;
         try {
-            InetAddress a = InetAddress.getByName(host);
-            long t0 = SystemClock.elapsedRealtime();
-            try (Socket s = new Socket()) {
-                s.connect(new InetSocketAddress(a, port), timeoutMs);
-            }
-            return SystemClock.elapsedRealtime() - t0;
+            a = InetAddress.getByName(host);
         } catch (IOException e) {
             return -2;
         }
+        List<Long> ok = new ArrayList<>();
+        for (int i = 0; i < TRIES; i++) {
+            long t0 = SystemClock.elapsedRealtime();
+            try (Socket s = new Socket()) {
+                s.connect(new InetSocketAddress(a, port), TRY_MS);
+                ok.add(SystemClock.elapsedRealtime() - t0);
+            } catch (IOException ignored) {
+            }
+        }
+        return average(ok);
     }
 
-    private static long icmp(String host, int timeoutMs) {
+    private static long icmpAvg(String host) {
         Process p = null;
         try {
-            int w = Math.max(1, timeoutMs / 1000);
-            p = new ProcessBuilder("/system/bin/ping", "-c", "1", "-W", String.valueOf(w), host)
+            p = new ProcessBuilder("/system/bin/ping", "-c", String.valueOf(TRIES),
+                    "-W", "1", "-w", String.valueOf(TRIES), host)
                     .redirectErrorStream(true).start();
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             byte[] buf = new byte[1024];
             InputStream in = p.getInputStream();
             int n;
             while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
-            p.waitFor(w + 2L, TimeUnit.SECONDS);
+            p.waitFor(2, TimeUnit.SECONDS);
             Matcher m = Pattern.compile("time=([0-9.]+)").matcher(bo.toString("UTF-8"));
-            if (m.find()) return Math.round(Double.parseDouble(m.group(1)));
-            return -2;
+            List<Long> ok = new ArrayList<>();
+            while (m.find()) ok.add(Math.round(Double.parseDouble(m.group(1))));
+            return average(ok);
         } catch (Exception e) {
             return -2;
         } finally {
@@ -134,7 +152,7 @@ final class Net {
     }
 
     /** Starts a throw-away xray on a free port and times an HTTP request through it. */
-    private static long realDelay(Context ctx, String link, int timeoutMs, String url) {
+    private static long realDelay(Context ctx, String link, String url) {
         File cfg = null, log = null;
         Process p = null;
         try {
@@ -158,12 +176,16 @@ final class Net {
                 lastError = "xray بالا نیومد: " + tail(log, 400);
                 return -2;
             }
-            long r = httpViaSocks(port, url, timeoutMs);
-            if (r < 0) {
+            List<Long> ok = new ArrayList<>();
+            for (int i = 0; i < TRIES; i++) {
+                long r = httpViaSocks(port, url, TRY_MS);
+                if (r >= 0) ok.add(r);
+            }
+            if (ok.isEmpty()) {
                 Thread.sleep(200);
                 lastError = lastError + " | " + tail(log, 400);
             }
-            return r;
+            return average(ok);
         } catch (Exception e) {
             lastError = String.valueOf(e);
             return -2;
@@ -222,14 +244,15 @@ final class Net {
             int dport = u.getPort() > 0 ? u.getPort() : 80;
             String path = (u.getFile() == null || u.getFile().isEmpty()) ? "/" : u.getFile();
 
+            final long deadline = SystemClock.elapsedRealtime() + timeoutMs;
             s.connect(new InetSocketAddress("127.0.0.1", port), timeoutMs);
-            s.setSoTimeout(timeoutMs);
             OutputStream o = s.getOutputStream();
             InputStream in = s.getInputStream();
 
             long t0 = SystemClock.elapsedRealtime();
             o.write(new byte[]{5, 1, 0});
             o.flush();
+            left(s, deadline);
             byte[] r = new byte[2];
             readFully(in, r, 2);
             if (r[0] != 5 || r[1] != 0) return -2;
@@ -247,6 +270,7 @@ final class Net {
             o.write(req);
             o.flush();
 
+            left(s, deadline);
             byte[] head = new byte[4];
             readFully(in, head, 4);
             if (head[1] != 0) {
@@ -255,6 +279,7 @@ final class Net {
             }
             int skip = head[3] == 1 ? 6 : head[3] == 4 ? 18 : 0;
             if (head[3] == 3) skip = (in.read() & 0xff) + 2;
+            left(s, deadline);
             readFully(in, new byte[skip], skip);
 
             String http = "GET " + path + " HTTP/1.1\r\nHost: " + host
@@ -262,6 +287,7 @@ final class Net {
             o.write(http.getBytes(StandardCharsets.UTF_8));
             o.flush();
 
+            left(s, deadline);
             StringBuilder line = new StringBuilder();
             int ch;
             while ((ch = in.read()) != -1 && ch != '\n' && line.length() < 200) line.append((char) ch);
@@ -274,6 +300,12 @@ final class Net {
             lastError = "http: " + e;
             return -2;
         }
+    }
+
+    private static void left(Socket s, long deadline) throws IOException {
+        long rem = deadline - SystemClock.elapsedRealtime();
+        if (rem <= 0) throw new java.net.SocketTimeoutException("timeout");
+        s.setSoTimeout((int) rem);
     }
 
     private static void readFully(InputStream in, byte[] b, int n) throws IOException {

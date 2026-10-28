@@ -49,7 +49,6 @@ public class SettingsActivity extends Activity {
         addRow("MTU", () -> String.valueOf(Settings.mtu(this)), this::pickMtu);
         addRow("روش پینگ", () -> Settings.PING_NAMES[Settings.pingMethod(this)], this::pickPing);
         addRow("آدرس تست (برای تأخیر واقعی)", () -> Settings.pingUrl(this), this::pickUrl);
-        addRow("زمان انتظار پینگ", () -> Settings.timeoutSec(this) + " ثانیه", this::pickTimeout);
 
         header("فرگمنت");
         addRow("حالت فرگمنت", () -> Settings.FRAG_MODES[Settings.getInt(this, "frag_mode", 0)], this::pickFragMode);
@@ -205,20 +204,6 @@ public class SettingsActivity extends Activity {
                 }).show();
     }
 
-    private void pickTimeout() {
-        String[] items = new String[Settings.TIMEOUTS.length];
-        int cur = 0;
-        for (int i = 0; i < items.length; i++) {
-            items[i] = Settings.TIMEOUTS[i] + " ثانیه";
-            if (Settings.TIMEOUTS[i] == Settings.timeoutSec(this)) cur = i;
-        }
-        new AlertDialog.Builder(this).setTitle("زمان انتظار پینگ")
-                .setSingleChoiceItems(items, cur, (d, w) -> {
-                    Settings.putInt(this, "ping_timeout", Settings.TIMEOUTS[w]);
-                    d.dismiss();
-                    refreshAll();
-                }).show();
-    }
 
     private void runDiag() {
         String sel = Store.selected(this);
