@@ -88,10 +88,10 @@ final class Net {
     static final int TRIES = 5;
     static final int TRY_MS = 1000;
 
-    /** @return average ms (>=0) or -2 on failure */
-    static long ping(Context ctx, String link) {
+    /** @param method 0 = TCP, 1 = ICMP, 2 = real delay through xray
+     * @return average ms (>=0) or -2 on failure */
+    static long ping(Context ctx, String link, int method) {
         try {
-            int method = Settings.pingMethod(ctx);
             if (method == 2) return realDelay(ctx, link, Settings.pingUrl(ctx));
             String[] ep = ConfigBuilder.endpoint(link);
             if (ep == null) return -2;

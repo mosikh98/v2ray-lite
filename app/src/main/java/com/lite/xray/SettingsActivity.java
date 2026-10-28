@@ -47,8 +47,7 @@ public class SettingsActivity extends Activity {
             return Settings.DNS_NAMES[Settings.dnsIndex(this)] + "  (" + TextUtils.join(", ", ips) + ")";
         }, this::pickDns);
         addRow("MTU", () -> String.valueOf(Settings.mtu(this)), this::pickMtu);
-        addRow("روش پینگ", () -> Settings.PING_NAMES[Settings.pingMethod(this)], this::pickPing);
-        addRow("آدرس تست (برای تأخیر واقعی)", () -> Settings.pingUrl(this), this::pickUrl);
+        addRow("آدرس تست (برای real delay)", () -> Settings.pingUrl(this), this::pickUrl);
 
         header("فرگمنت");
         addRow("حالت فرگمنت", () -> Settings.FRAG_MODES[Settings.getInt(this, "frag_mode", 0)], this::pickFragMode);
@@ -177,14 +176,6 @@ public class SettingsActivity extends Activity {
                 }).show();
     }
 
-    private void pickPing() {
-        new AlertDialog.Builder(this).setTitle("روش پینگ")
-                .setSingleChoiceItems(Settings.PING_NAMES, Settings.pingMethod(this), (d, w) -> {
-                    Settings.putInt(this, "ping_method", w);
-                    d.dismiss();
-                    refreshAll();
-                }).show();
-    }
 
     private void pickUrl() {
         new AlertDialog.Builder(this).setTitle("آدرس تست")

@@ -48,7 +48,7 @@ public class MainActivity extends Activity {
     private TextView status, mon;
     private final Monitor monitor = new Monitor();
     private String selectedId = "";
-    private ExecutorService pingPool;
+    private ExecutorService fastPool, realPool;
     private boolean pinging = false;
     private int pingGen = 0;
     private float dp;
@@ -79,10 +79,12 @@ public class MainActivity extends Activity {
         Button addBtn = barButton("افزودن");
         pingBtn = barButton("پینگ");
         Button sortBtn = barButton("مرتب");
+        Button subBtn = barButton("اشتراک");
         Button setBtn = barButton("تنظیمات");
         bar.addView(addBtn);
         bar.addView(pingBtn);
         bar.addView(sortBtn);
+        bar.addView(subBtn);
         bar.addView(setBtn);
         root.addView(bar);
 
@@ -142,6 +144,7 @@ public class MainActivity extends Activity {
         addBtn.setOnClickListener(v -> addMenu());
         pingBtn.setOnClickListener(v -> togglePing());
         sortBtn.setOnClickListener(v -> sortByPing());
+        subBtn.setOnClickListener(v -> manageSubs());
         setBtn.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
 
         reload();
@@ -162,15 +165,19 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         pingGen++;
-        if (pingPool != null) pingPool.shutdownNow();
+        if (fastPool != null) fastPool.shutdownNow();
+        if (realPool != null) realPool.shutdownNow();
         super.onDestroy();
     }
 
     private Button barButton(String t) {
         Button b = new Button(this);
         b.setText(t);
-        b.setTextSize(13);
+        b.setTextSize(12);
         b.setAllCaps(false);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setPadding((int) (4 * dp), b.getPaddingTop(), (int) (4 * dp), b.getPaddingBottom());
         b.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         return b;
     }
@@ -258,21 +265,41 @@ public class MainActivity extends Activity {
         col.addView(t1);
         col.addView(t2);
 
-        TextView t3 = new TextView(this);
-        t3.setTextSize(13);
-        long ping = s.ping;
-        if (ping == -3) {
-            t3.setText("…");
-        } else if (ping == -2) {
-            t3.setText("✕");
-            t3.setTextColor(0xFFD32F2F);
-        } else if (ping >= 0) {
-            t3.setText(ping + " ms");
-            t3.setTextColor(ping < 300 ? 0xFF2E7D32 : ping < 800 ? 0xFFEF6C00 : 0xFFD32F2F);
-        }
+        // results in one horizontal line under the name:  tcp 44   icmp 58   real 115
+        LinearLayout pc = new LinearLayout(this);
+        pc.setOrientation(LinearLayout.HORIZONTAL);
+        pc.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        pc.setPadding(0, (int) (2 * dp), 0, 0);
+        boolean any = false;
+        any |= addPingLine(pc, "tcp", s.tcp);
+        any |= addPingLine(pc, "icmp", s.icmp);
+        any |= addPingLine(pc, "real", s.real);
+        if (any) col.addView(pc);
+
         row.addView(col);
-        row.addView(t3);
         return row;
+    }
+
+    /** one small "label value" item; nothing is added while the test has not run yet */
+    private boolean addPingLine(LinearLayout parent, String label, long v) {
+        if (v == -1) return false;
+        TextView t = new TextView(this);
+        t.setTextSize(11);
+        t.setSingleLine(true);
+        if (v == -3) {
+            t.setText(label + " …");
+        } else if (v == -2) {
+            t.setText(label + " ✕");
+            t.setTextColor(0xFFD32F2F);
+        } else {
+            t.setText(label + " " + v);
+            t.setTextColor(v < 300 ? 0xFF2E7D32 : v < 800 ? 0xFFEF6C00 : 0xFFD32F2F);
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = (int) (14 * dp);
+        parent.addView(t, lp);
+        return true;
     }
 
     private void select(Store.Server s) {
@@ -364,79 +391,102 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ ping
 
+    /** TCP, ICMP and real delay run at the same time for every server (real delay is limited to 3 xray at once). */
     private void togglePing() {
         if (pinging) {
             pingGen++;
-            if (pingPool != null) pingPool.shutdownNow();
+            if (fastPool != null) fastPool.shutdownNow();
+            if (realPool != null) realPool.shutdownNow();
             finishPing();
             return;
         }
         if (servers.isEmpty()) return;
         pinging = true;
         pingBtn.setText("توقف");
-        for (Store.Server s : servers) s.ping = -3;
+        final List<Store.Server> targets = new ArrayList<>(servers);
+        for (Store.Server s : targets) {
+            s.tcp = -3;
+            s.icmp = -3;
+            s.real = -3;
+        }
         adapter.notifyDataSetChanged();
 
         final int gen = ++pingGen;
         final Context app = getApplicationContext();
-        int m = Settings.pingMethod(this);
-        final ExecutorService pool = Executors.newFixedThreadPool(m == 2 ? 3 : m == 1 ? 8 : 16);
-        pingPool = pool;
-        final List<Store.Server> targets = new ArrayList<>(servers);
-        final AtomicInteger left = new AtomicInteger(targets.size());
+        final ExecutorService fast = Executors.newFixedThreadPool(12);
+        final ExecutorService real = Executors.newFixedThreadPool(3);
+        fastPool = fast;
+        realPool = real;
+        final AtomicInteger left = new AtomicInteger(targets.size() * 3);
         for (final Store.Server s : targets) {
-            pool.execute(() -> {
-                long r = Net.ping(app, s.link);
-                if (gen != pingGen) return;
-                s.ping = r;
-                ui.post(() -> {
-                    if (gen != pingGen) return;
-                    adapter.notifyDataSetChanged();
-                    if (left.decrementAndGet() == 0) finishPing();
-                });
-            });
+            submitPing(fast, gen, left, app, s, 0);
+            submitPing(fast, gen, left, app, s, 1);
+            submitPing(real, gen, left, app, s, 2);
         }
-        pool.shutdown();
+        fast.shutdown();
+        real.shutdown();
+    }
+
+    private void submitPing(ExecutorService pool, final int gen, final AtomicInteger left,
+                            final Context app, final Store.Server s, final int method) {
+        pool.execute(() -> {
+            long r = Net.ping(app, s.link, method);
+            if (gen != pingGen) return;
+            if (method == 0) s.tcp = r;
+            else if (method == 1) s.icmp = r;
+            else s.real = r;
+            ui.post(() -> {
+                if (gen != pingGen) return;
+                adapter.notifyDataSetChanged();
+                if (left.decrementAndGet() == 0) finishPing();
+            });
+        });
     }
 
     private void finishPing() {
         pinging = false;
         pingBtn.setText("پینگ");
-        boolean any = false;
+        boolean realOk = false;
         for (Store.Server s : servers) {
-            if (s.ping == -3) s.ping = -1;
-            if (s.ping >= 0) any = true;
+            if (s.tcp == -3) s.tcp = -1;
+            if (s.icmp == -3) s.icmp = -1;
+            if (s.real == -3) s.real = -1;
+            if (s.real >= 0) realOk = true;
         }
         adapter.notifyDataSetChanged();
-        if (!any && !servers.isEmpty() && Settings.pingMethod(this) == 2 && !Net.lastError.isEmpty()) {
-            toastLong(Net.lastError);
-        }
+        if (!realOk && !servers.isEmpty() && !Net.lastError.isEmpty()) toastLong(Net.lastError);
     }
 
     private void pingOne(final Store.Server s) {
         final Context app = getApplicationContext();
-        s.ping = -3;
+        s.tcp = -3;
+        s.icmp = -3;
+        s.real = -3;
         adapter.notifyDataSetChanged();
-        new Thread(() -> {
-            long r = Net.ping(app, s.link);
-            s.ping = r;
-            ui.post(() -> {
-                adapter.notifyDataSetChanged();
-                if (r < 0 && Settings.pingMethod(this) == 2 && !Net.lastError.isEmpty()) {
-                    toastLong(Net.lastError);
-                }
-            });
-        }).start();
+        for (int m = 0; m < 3; m++) {
+            final int method = m;
+            new Thread(() -> {
+                long r = Net.ping(app, s.link, method);
+                if (method == 0) s.tcp = r;
+                else if (method == 1) s.icmp = r;
+                else s.real = r;
+                ui.post(() -> {
+                    adapter.notifyDataSetChanged();
+                    if (method == 2 && r < 0 && !Net.lastError.isEmpty()) toastLong(Net.lastError);
+                });
+            }).start();
+        }
+    }
+
+    /** real delay first, then servers that only answered TCP, untested ones keep their order */
+    private static long sortKey(Store.Server s) {
+        if (s.real >= 0) return s.real;
+        if (s.tcp >= 0) return 1000000 + s.tcp;
+        return Long.MAX_VALUE;
     }
 
     private void sortByPing() {
-        Collections.sort(servers, (a, b) -> {
-            boolean ao = a.ping >= 0, bo = b.ping >= 0;
-            if (ao && bo) return Long.compare(a.ping, b.ping);
-            if (ao) return -1;
-            if (bo) return 1;
-            return 0;
-        });
+        Collections.sort(servers, (a, b) -> Long.compare(sortKey(a), sortKey(b)));
         saveServers();
     }
 
@@ -448,8 +498,7 @@ public class MainActivity extends Activity {
                         "از کلیپ‌بورد (لینک سرور یا اشتراک)",
                         "ورود دستی لینک / JSON",
                         "افزودن لینک اشتراک",
-                        "به‌روزرسانی همه اشتراک‌ها",
-                        "مدیریت اشتراک‌ها"}, (d, w) -> {
+                        "به‌روزرسانی همه اشتراک‌ها"}, (d, w) -> {
                     switch (w) {
                         case 0:
                             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -464,15 +513,12 @@ public class MainActivity extends Activity {
                             manualDialog();
                             break;
                         case 2:
-                            addSubDialog("");
+                            subDialog(null, "");
                             break;
-                        case 3:
+                        default:
                             List<Store.Sub> all = Store.subs(this);
                             if (all.isEmpty()) toast("اشتراکی نداری");
                             else updateSubs(all);
-                            break;
-                        default:
-                            manageSubs();
                     }
                 }).show();
     }
@@ -518,7 +564,7 @@ public class MainActivity extends Activity {
             return;
         }
         if ((t.startsWith("http://") || t.startsWith("https://")) && !t.contains("\n")) {
-            addSubDialog(t);
+            subDialog(null, t);
             return;
         }
         List<String> links = Net.parseLinks(t);
@@ -539,50 +585,72 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ subscriptions
 
-    private void addSubDialog(String prefillUrl) {
+    /** add (existing == null) or edit a subscription */
+    private void subDialog(final Store.Sub existing, String prefillUrl) {
         final EditText name = new EditText(this);
         name.setHint("نام (اختیاری)");
         final EditText url = new EditText(this);
         url.setHint("https://...");
-        url.setText(prefillUrl);
         url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         url.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        new AlertDialog.Builder(this).setTitle("افزودن اشتراک").setView(padded(name, url))
-                .setPositiveButton("افزودن", (d, w) -> {
+        if (existing != null) {
+            name.setText(existing.name);
+            url.setText(existing.url);
+        } else {
+            url.setText(prefillUrl);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(existing == null ? "افزودن اشتراک" : "ویرایش اشتراک")
+                .setView(padded(name, url))
+                .setPositiveButton(existing == null ? "افزودن" : "ذخیره", (d, w) -> {
                     String u = url.getText().toString().trim();
                     if (!u.startsWith("http://") && !u.startsWith("https://")) {
                         toast("آدرس نامعتبر");
                         return;
                     }
-                    Store.Sub s = new Store.Sub();
-                    s.id = Store.newId();
-                    s.url = u;
                     String n = name.getText().toString().trim();
                     String host = Uri.parse(u).getHost();
-                    s.name = !n.isEmpty() ? n : (host != null ? host : "اشتراک");
+                    if (n.isEmpty()) n = host != null ? host : "اشتراک";
+
                     List<Store.Sub> subs = Store.subs(this);
-                    subs.add(s);
+                    Store.Sub target = null;
+                    if (existing != null) {
+                        for (Store.Sub x : subs) if (x.id.equals(existing.id)) target = x;
+                    }
+                    boolean refetch = true;
+                    if (target == null) {
+                        target = new Store.Sub();
+                        target.id = Store.newId();
+                        subs.add(target);
+                    } else {
+                        refetch = !target.url.equals(u);
+                    }
+                    target.url = u;
+                    target.name = n;
                     Store.saveSubs(this, subs);
-                    subNames.put(s.id, s.name);
-                    updateSubs(Collections.singletonList(s));
+                    subNames.put(target.id, target.name);
+                    adapter.notifyDataSetChanged();
+                    if (refetch) updateSubs(Collections.singletonList(target));
+                    else toast("ذخیره شد");
                 })
                 .setNegativeButton("لغو", null).show();
     }
 
     private void manageSubs() {
         final List<Store.Sub> subs = Store.subs(this);
-        if (subs.isEmpty()) {
-            toast("اشتراکی نداری");
-            return;
-        }
-        String[] names = new String[subs.size()];
-        for (int i = 0; i < names.length; i++) names[i] = subs.get(i).name;
+        String[] names = new String[subs.size() + 1];
+        for (int i = 0; i < subs.size(); i++) names[i] = subs.get(i).name;
+        names[subs.size()] = "＋ افزودن اشتراک جدید";
         new AlertDialog.Builder(this).setTitle("اشتراک‌ها").setItems(names, (d, w) -> {
+            if (w == subs.size()) {
+                subDialog(null, "");
+                return;
+            }
             final Store.Sub s = subs.get(w);
             new AlertDialog.Builder(this).setTitle(s.name).setMessage(s.url)
-                    .setPositiveButton("به‌روزرسانی", (d2, w2) -> updateSubs(Collections.singletonList(s)))
-                    .setNegativeButton("حذف", (d2, w2) -> deleteSub(s))
-                    .setNeutralButton("بستن", null).show();
+                    .setPositiveButton("ویرایش", (d2, w2) -> subDialog(s, ""))
+                    .setNeutralButton("به‌روزرسانی", (d2, w2) -> updateSubs(Collections.singletonList(s)))
+                    .setNegativeButton("حذف", (d2, w2) -> deleteSub(s)).show();
         }).show();
     }
 

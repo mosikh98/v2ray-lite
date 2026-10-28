@@ -16,3 +16,10 @@
 Push کن روی گیتهاب (branch: main) → تب Actions → «Build APK» → Artifacts.
 هسته‌ی Xray و tun2socks موقع بیلد دانلود/کامپایل میشن؛ باینری توی ریپو نیست.
 APK با کلید debug ساین میشه. فقط arm64-v8a.
+
+## امضا
+کلید امضا توی ریپو نیست؛ از GitHub Secrets خونده میشه:
+- `KEYSTORE_B64` : فایل کلید (p12) به‌صورت base64
+- `KEYSTORE_PASSWORD` : رمز کلید (alias ثابت: xraylite)
+
+با کلید ثابت، هر نسخه‌ی جدید روی قبلی نصب میشه. versionCode از شماره‌ی اجرای Actions گرفته میشه.

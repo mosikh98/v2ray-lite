@@ -18,7 +18,7 @@ final class Store {
     static final class Server {
         String id, name, link, group = "";
         /** ms; -1 = untested, -2 = failed, -3 = testing */
-        volatile long ping = -1;
+        volatile long tcp = -1, icmp = -1, real = -1;
     }
 
     static final class Sub {

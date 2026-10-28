@@ -26,11 +26,6 @@ final class Settings {
 
     static final int[] MTUS = {1280, 1360, 1400, 1450, 1500, 8500};
 
-    static final String[] PING_NAMES = {
-            "TCP (اتصال به پورت سرور)",
-            "ICMP (پینگ معمولی)",
-            "تأخیر واقعی (عبور از Xray)"};
-
     // last entry of URL_NAMES is "custom"
     static final String[] URL_NAMES = {
             "Cloudflare (cp.cloudflare.com)",
@@ -130,10 +125,6 @@ final class Settings {
     }
 
     // ----- ping -----
-    static int pingMethod(Context c) {
-        int i = sp(c).getInt("ping_method", 2);
-        return (i < 0 || i >= PING_NAMES.length) ? 2 : i;
-    }
 
     static int urlIndex(Context c) {
         int i = sp(c).getInt("ping_url", 1);
