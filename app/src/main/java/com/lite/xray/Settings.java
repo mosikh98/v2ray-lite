@@ -38,6 +38,23 @@ final class Settings {
             "http://detectportal.firefox.com/success.txt",
             ""};
 
+    // ----- speed test / sorting -----
+    static final int[] SPEED_MBS = {2, 4, 6, 8, 10};
+
+    static int speedMb(Context c) {
+        int v = sp(c).getInt("speed_mb", 4);
+        for (int x : SPEED_MBS) if (x == v) return v;
+        return 4;
+    }
+
+    static boolean autoSort(Context c) {
+        return sp(c).getBoolean("auto_sort", true);
+    }
+
+    static void putBool(Context c, String k, boolean v) {
+        sp(c).edit().putBoolean(k, v).apply();
+    }
+
     // ----- fragment -----
     static final String[] FRAG_MODES = {
             "خاموش",

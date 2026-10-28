@@ -95,7 +95,7 @@ final class ConfigBuilder {
         } else {
             s = s.split("\\r?\\n")[0].trim();
             root = new JSONObject();
-            root.put("log", new JSONObject().put("loglevel", "warning"));
+            root.put("log", new JSONObject().put("loglevel", "warning").put("access", "none"));
             JSONArray ds = new JSONArray();
             for (String d : dns) ds.put(d);
             root.put("dns", new JSONObject().put("servers", ds));

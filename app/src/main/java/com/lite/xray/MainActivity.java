@@ -12,6 +12,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -49,6 +50,7 @@ public class MainActivity extends Activity {
     private final Monitor monitor = new Monitor();
     private String selectedId = "";
     private ExecutorService fastPool, realPool;
+    private SpeedTest speed;
     private boolean pinging = false;
     private int pingGen = 0;
     private float dp;
@@ -78,12 +80,19 @@ public class MainActivity extends Activity {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         Button addBtn = barButton("افزودن");
         pingBtn = barButton("پینگ");
-        Button sortBtn = barButton("مرتب");
+        Button speedBtn = barButton("سرعت");
+        Drawable ic = getDrawable(R.drawable.ic_speed);
+        if (ic != null) {
+            int sz = (int) (16 * dp);
+            ic.setBounds(0, 0, sz, sz);
+            speedBtn.setCompoundDrawablesRelative(ic, null, null, null);
+            speedBtn.setCompoundDrawablePadding((int) (3 * dp));
+        }
         Button subBtn = barButton("اشتراک");
         Button setBtn = barButton("تنظیمات");
         bar.addView(addBtn);
         bar.addView(pingBtn);
-        bar.addView(sortBtn);
+        bar.addView(speedBtn);
         bar.addView(subBtn);
         bar.addView(setBtn);
         root.addView(bar);
@@ -143,7 +152,7 @@ public class MainActivity extends Activity {
 
         addBtn.setOnClickListener(v -> addMenu());
         pingBtn.setOnClickListener(v -> togglePing());
-        sortBtn.setOnClickListener(v -> sortByPing());
+        speedBtn.setOnClickListener(v -> speedTest());
         subBtn.setOnClickListener(v -> manageSubs());
         setBtn.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
 
@@ -397,7 +406,7 @@ public class MainActivity extends Activity {
             pingGen++;
             if (fastPool != null) fastPool.shutdownNow();
             if (realPool != null) realPool.shutdownNow();
-            finishPing();
+            finishPing(false);
             return;
         }
         if (servers.isEmpty()) return;
@@ -438,12 +447,12 @@ public class MainActivity extends Activity {
             ui.post(() -> {
                 if (gen != pingGen) return;
                 adapter.notifyDataSetChanged();
-                if (left.decrementAndGet() == 0) finishPing();
+                if (left.decrementAndGet() == 0) finishPing(true);
             });
         });
     }
 
-    private void finishPing() {
+    private void finishPing(boolean done) {
         pinging = false;
         pingBtn.setText("پینگ");
         boolean realOk = false;
@@ -455,6 +464,7 @@ public class MainActivity extends Activity {
         }
         adapter.notifyDataSetChanged();
         if (!realOk && !servers.isEmpty() && !Net.lastError.isEmpty()) toastLong(Net.lastError);
+        if (done && Settings.autoSort(this)) sortByPing();
     }
 
     private void pingOne(final Store.Server s) {
@@ -488,6 +498,46 @@ public class MainActivity extends Activity {
     private void sortByPing() {
         Collections.sort(servers, (a, b) -> Long.compare(sortKey(a), sortKey(b)));
         saveServers();
+    }
+
+    // ------------------------------------------------------------ speed test
+
+    private void speedTest() {
+        if (speed != null) return;
+        final Store.Server s = selectedServer();
+        if (s == null) {
+            toast("اول یک سرور اضافه یا انتخاب کن");
+            return;
+        }
+        final int mb = Settings.speedMb(this);
+        final TextView tv = new TextView(this);
+        tv.setTextSize(14);
+        tv.setPadding((int) (20 * dp), (int) (12 * dp), (int) (20 * dp), 0);
+        tv.setText("در حال شروع…");
+        final AlertDialog dlg = new AlertDialog.Builder(this).setTitle("تست سرعت")
+                .setView(tv).setNegativeButton("توقف", null).create();
+        final SpeedTest st = new SpeedTest();
+        speed = st;
+        dlg.setOnDismissListener(d -> {
+            st.cancel();
+            speed = null;
+        });
+        dlg.show();
+        final Context app = getApplicationContext();
+        new Thread(() -> st.run(app, s.link, s.name, mb, new SpeedTest.Listener() {
+            @Override
+            public void onUpdate(final String text) {
+                ui.post(() -> tv.setText(text));
+            }
+
+            @Override
+            public void onDone() {
+                ui.post(() -> {
+                    Button b = dlg.getButton(AlertDialog.BUTTON_NEGATIVE);
+                    if (b != null) b.setText("بستن");
+                });
+            }
+        }), "speed-test").start();
     }
 
     // ------------------------------------------------------------ add / import

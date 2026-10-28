@@ -8,6 +8,8 @@ on:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +26,8 @@ jobs:
           unzip -o /tmp/xray.zip xray -d /tmp/xray
           cp /tmp/xray/xray app/src/main/jniLibs/arm64-v8a/libxray.so
           chmod +x app/src/main/jniLibs/arm64-v8a/libxray.so
+          TAG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/XTLS/Xray-core/releases/latest | sed 's|.*/tag/||' || true)
+          echo "XRAY_TAG=${TAG:-latest}" >> "$GITHUB_ENV"
 
       - name: Build tun2socks (hev-socks5-tunnel + our JNI shim)
         run: |
@@ -74,7 +78,24 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: gradle assembleRelease --no-daemon
 
+      - name: Name the APK
+        run: cp app/build/outputs/apk/release/*.apk "XrayLite-v1.0.${{ github.run_number }}.apk"
+
       - uses: actions/upload-artifact@v4
         with:
           name: XrayLite-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: XrayLite-v1.0.${{ github.run_number }}.apk
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: XrayLite v1.0.${{ github.run_number }}
+          files: XrayLite-v1.0.${{ github.run_number }}.apk
+          generate_release_notes: true
+          body: |
+            **XrayLite build ${{ github.run_number }}**
+            - Xray-core: `${{ env.XRAY_TAG }}`
+            - Android 8.0+ / arm64-v8a
+            - Signed with the project key: installs as an update over the previous build.

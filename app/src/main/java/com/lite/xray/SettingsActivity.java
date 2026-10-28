@@ -49,6 +49,12 @@ public class SettingsActivity extends Activity {
         addRow("MTU", () -> String.valueOf(Settings.mtu(this)), this::pickMtu);
         addRow("آدرس تست (برای real delay)", () -> Settings.pingUrl(this), this::pickUrl);
 
+        addRow("مرتب‌سازی خودکار بعد از پینگ", () -> Settings.autoSort(this) ? "روشن" : "خاموش", () -> {
+            Settings.putBool(this, "auto_sort", !Settings.autoSort(this));
+            refreshAll();
+        });
+        addRow("حجم تست سرعت (دانلود و آپلود)", () -> Settings.speedMb(this) + " MB", this::pickSpeed);
+
         header("فرگمنت");
         addRow("حالت فرگمنت", () -> Settings.FRAG_MODES[Settings.getInt(this, "frag_mode", 0)], this::pickFragMode);
         addRow("لایه داخلی — packets", () -> Settings.getStr(this, "f1_packets", Settings.F1_DEF[0]),
@@ -158,6 +164,21 @@ public class SettingsActivity extends Activity {
                         Settings.putInt(this, "dns", w);
                         refreshAll();
                     }
+                }).show();
+    }
+
+    private void pickSpeed() {
+        String[] items = new String[Settings.SPEED_MBS.length];
+        int cur = 0;
+        for (int i = 0; i < items.length; i++) {
+            items[i] = Settings.SPEED_MBS[i] + " MB";
+            if (Settings.SPEED_MBS[i] == Settings.speedMb(this)) cur = i;
+        }
+        new AlertDialog.Builder(this).setTitle("حجم تست سرعت")
+                .setSingleChoiceItems(items, cur, (d, w) -> {
+                    Settings.putInt(this, "speed_mb", Settings.SPEED_MBS[w]);
+                    d.dismiss();
+                    refreshAll();
                 }).show();
     }
 

@@ -60,7 +60,7 @@ final class Diag {
             String json = ConfigBuilder.build(link, port, Settings.dnsList(ctx), false, Settings.frag(ctx));
             json = ConfigBuilder.resolveServers(json);
             JSONObject root = new JSONObject(json);
-            root.getJSONObject("log").put("loglevel", "info");
+            root.getJSONObject("log").put("loglevel", "info").remove("access");
             cfg = new File(ctx.getCacheDir(), "diag.json");
             log = new File(ctx.getCacheDir(), "diag.log");
             try (FileOutputStream o = new FileOutputStream(cfg)) {
