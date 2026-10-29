@@ -45,7 +45,7 @@ public class MainActivity extends Activity {
     private final Map<String, String> subNames = new HashMap<>();
     private final Handler ui = new Handler(Looper.getMainLooper());
     private BaseAdapter adapter;
-    private Button btn, pingBtn;
+    private Button btn, pingBtn, speedBtn;
     private TextView status, mon;
     private final Monitor monitor = new Monitor();
     private String selectedId = "";
@@ -80,7 +80,7 @@ public class MainActivity extends Activity {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         Button addBtn = barButton("افزودن");
         pingBtn = barButton("پینگ");
-        Button speedBtn = barButton("سرعت");
+        speedBtn = barButton("سرعت");
         Drawable ic = getDrawable(R.drawable.ic_speed);
         if (ic != null) {
             int sz = (int) (16 * dp);
@@ -152,7 +152,7 @@ public class MainActivity extends Activity {
 
         addBtn.setOnClickListener(v -> addMenu());
         pingBtn.setOnClickListener(v -> togglePing());
-        speedBtn.setOnClickListener(v -> speedTest());
+        speedBtn.setOnClickListener(v -> toggleSpeed());
         subBtn.setOnClickListener(v -> manageSubs());
         setBtn.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
 
@@ -176,6 +176,7 @@ public class MainActivity extends Activity {
         pingGen++;
         if (fastPool != null) fastPool.shutdownNow();
         if (realPool != null) realPool.shutdownNow();
+        if (speed != null) speed.cancel();
         super.onDestroy();
     }
 
@@ -285,8 +286,38 @@ public class MainActivity extends Activity {
         any |= addPingLine(pc, "real", s.real);
         if (any) col.addView(pc);
 
+        // speed results:  ↓ 12.4 Mbps   ↑ 3.1 Mbps
+        LinearLayout sc = new LinearLayout(this);
+        sc.setOrientation(LinearLayout.HORIZONTAL);
+        sc.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        boolean sany = false;
+        sany |= addSpeedItem(sc, "↓", s.dl);
+        sany |= addSpeedItem(sc, "↑", s.ul);
+        if (sany) col.addView(sc);
+
         row.addView(col);
         return row;
+    }
+
+    private boolean addSpeedItem(LinearLayout parent, String arrow, double v) {
+        if (v == -1) return false;
+        TextView t = new TextView(this);
+        t.setTextSize(11);
+        t.setSingleLine(true);
+        if (v == -3) {
+            t.setText(arrow + " …");
+        } else if (v == -2) {
+            t.setText(arrow + " ✕");
+            t.setTextColor(0xFFD32F2F);
+        } else {
+            t.setText(String.format(java.util.Locale.US, "%s %.1f Mbps", arrow, v));
+            t.setTextColor(v >= 10 ? 0xFF2E7D32 : v >= 3 ? 0xFFEF6C00 : 0xFFD32F2F);
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = (int) (14 * dp);
+        parent.addView(t, lp);
+        return true;
     }
 
     /** one small "label value" item; nothing is added while the test has not run yet */
@@ -321,9 +352,10 @@ public class MainActivity extends Activity {
 
     private void itemMenu(final Store.Server s) {
         new AlertDialog.Builder(this).setTitle(s.name)
-                .setItems(new String[]{"پینگ این سرور", "کپی لینک", "حذف"}, (d, w) -> {
+                .setItems(new String[]{"پینگ این سرور", "تست سرعت این سرور", "کپی لینک", "حذف"}, (d, w) -> {
                     if (w == 0) pingOne(s);
-                    else if (w == 1) {
+                    else if (w == 1) startSpeed(Collections.singletonList(s));
+                    else if (w == 2) {
                         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                         cm.setPrimaryClip(ClipData.newPlainText("link", s.link));
                         toast("کپی شد");
@@ -410,6 +442,10 @@ public class MainActivity extends Activity {
             return;
         }
         if (servers.isEmpty()) return;
+        if (speed != null) {
+            toast("تست سرعت در حال اجراست");
+            return;
+        }
         pinging = true;
         pingBtn.setText("توقف");
         final List<Store.Server> targets = new ArrayList<>(servers);
@@ -502,42 +538,50 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ speed test
 
-    private void speedTest() {
-        if (speed != null) return;
-        final Store.Server s = selectedServer();
-        if (s == null) {
-            toast("اول یک سرور اضافه یا انتخاب کن");
+    /** the speed button: tests every server one by one, results appear in the rows; press again to stop */
+    private void toggleSpeed() {
+        if (speed != null) {
+            speed.cancel();
             return;
         }
-        final int mb = Settings.speedMb(this);
-        final TextView tv = new TextView(this);
-        tv.setTextSize(14);
-        tv.setPadding((int) (20 * dp), (int) (12 * dp), (int) (20 * dp), 0);
-        tv.setText("در حال شروع…");
-        final AlertDialog dlg = new AlertDialog.Builder(this).setTitle("تست سرعت")
-                .setView(tv).setNegativeButton("توقف", null).create();
+        if (servers.isEmpty()) return;
+        startSpeed(new ArrayList<>(servers));
+    }
+
+    private void startSpeed(final List<Store.Server> targets) {
+        if (speed != null) {
+            toast("تست سرعت در حال اجراست");
+            return;
+        }
+        if (pinging) {
+            toast("اول پینگ تموم بشه");
+            return;
+        }
         final SpeedTest st = new SpeedTest();
         speed = st;
-        dlg.setOnDismissListener(d -> {
-            st.cancel();
-            speed = null;
-        });
-        dlg.show();
+        speedBtn.setText("توقف");
+        for (Store.Server s : targets) {
+            s.dl = -1;
+            s.ul = -1;
+        }
+        adapter.notifyDataSetChanged();
         final Context app = getApplicationContext();
-        new Thread(() -> st.run(app, s.link, s.name, mb, new SpeedTest.Listener() {
-            @Override
-            public void onUpdate(final String text) {
-                ui.post(() -> tv.setText(text));
-            }
-
-            @Override
-            public void onDone() {
-                ui.post(() -> {
-                    Button b = dlg.getButton(AlertDialog.BUTTON_NEGATIVE);
-                    if (b != null) b.setText("بستن");
-                });
-            }
-        }), "speed-test").start();
+        final int mb = Settings.speedMb(this);
+        final String connected = XrayVpnService.running ? selectedId : "";
+        new Thread(() -> {
+            st.runAll(app, targets, connected, mb, () -> ui.post(() -> adapter.notifyDataSetChanged()));
+            ui.post(() -> {
+                if (speed == st) {
+                    speed = null;
+                    speedBtn.setText("سرعت");
+                }
+                for (Store.Server s : servers) {
+                    if (s.dl == -3) s.dl = -1;
+                    if (s.ul == -3) s.ul = -1;
+                }
+                adapter.notifyDataSetChanged();
+            });
+        }, "speed-test").start();
     }
 
     // ------------------------------------------------------------ add / import

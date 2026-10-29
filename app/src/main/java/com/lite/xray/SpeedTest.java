@@ -12,25 +12,22 @@ import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
+import java.util.List;
 
 /**
- * Download + upload speed through the proxy (Cloudflare speed endpoints).
- * Uses the running Xray if connected, otherwise starts a temporary one for the selected server.
+ * Download + upload speed through each server (Cloudflare speed endpoints). Results are written straight
+ * into Store.Server.dl / ul (Mbps). Servers are tested one after another because bandwidth tests must not overlap.
+ * The currently connected server is tested through the running Xray, every other one through a temporary Xray.
  */
 final class SpeedTest {
-    interface Listener {
-        void onUpdate(String text);
-
-        void onDone();
+    interface Progress {
+        /** called from the worker thread whenever a value changed */
+        void update();
     }
 
     private volatile boolean cancel = false;
     private volatile Process proc;
-    private Listener listener;
-    private String head = "";
-    private String dlLine = "…";
-    private String ulLine = "—";
+    private Progress progress;
 
     void cancel() {
         cancel = true;
@@ -38,30 +35,36 @@ final class SpeedTest {
         if (p != null) p.destroyForcibly();
     }
 
-    private void push() {
-        listener.onUpdate(head + "↓ دانلود: " + dlLine + "\n↑ آپلود: " + ulLine);
-    }
-
-    private static String fmt(double mbps, double sec) {
-        return String.format(Locale.US, "%.1f Mbps  (%.2f MB/s, %.1f s)", mbps, mbps / 8.0, sec);
-    }
-
     /** blocking - call from a worker thread */
-    void run(Context ctx, String link, String name, int mb, Listener l) {
-        listener = l;
-        final long bytes = mb * 1000000L;
-        head = "سرور: " + name + "\nحجم هر تست: " + mb + " MB\n\n";
+    void runAll(Context ctx, List<Store.Server> targets, String connectedId, int mb, Progress p) {
+        progress = p;
+        for (Store.Server s : targets) {
+            if (cancel) break;
+            testOne(ctx, s, connectedId, mb * 1000000L);
+        }
+    }
+
+    private void testOne(Context ctx, Store.Server s, String connectedId, long bytes) {
+        s.dl = -3;
+        s.ul = -3;
+        progress.update();
+        if (s.real == -2) { // the ping already showed that this one is dead
+            s.dl = -2;
+            s.ul = -2;
+            progress.update();
+            return;
+        }
+
         File cfg = null, log = null;
         Process p = null;
+        boolean dlDone = false, ulDone = false;
         try {
             int port;
-            if (XrayVpnService.running) {
+            if (XrayVpnService.running && s.id.equals(connectedId)) {
                 port = ConfigBuilder.SOCKS_PORT;
             } else {
-                dlLine = "در حال راه‌اندازی Xray…";
-                push();
                 port = Net.freePort();
-                String json = ConfigBuilder.build(link, port, Settings.dnsList(ctx), false, Settings.frag(ctx));
+                String json = ConfigBuilder.build(s.link, port, Settings.dnsList(ctx), false, Settings.frag(ctx));
                 json = ConfigBuilder.resolveServers(json);
                 cfg = new File(ctx.getCacheDir(), "speed.json");
                 log = new File(ctx.getCacheDir(), "speed.log");
@@ -75,52 +78,51 @@ final class SpeedTest {
                 pb.redirectOutput(ProcessBuilder.Redirect.to(log));
                 p = pb.start();
                 proc = p;
-                if (!Net.waitPort(p, port, 5000)) {
-                    throw new Exception("xray did not start: " + Net.tail(log, 300));
-                }
+                if (!Net.waitPort(p, port, 5000)) throw new Exception("xray did not start");
             }
 
-            dlLine = "…";
-            push();
-            try {
-                dlLine = download(port, bytes);
-            } catch (Exception e) {
-                dlLine = cancel ? "لغو شد" : "خطا: " + e.getMessage();
-            }
-            push();
+            double d = download(port, bytes, s);
+            if (cancel) return;
+            s.dl = d;
+            dlDone = true;
+            progress.update();
 
-            if (!cancel) {
-                ulLine = "…";
-                push();
-                try {
-                    ulLine = upload(port, bytes);
-                } catch (Exception e) {
-                    ulLine = cancel ? "لغو شد" : "خطا: " + e.getMessage();
-                }
-                push();
-            }
+            double u = upload(port, bytes, s);
+            if (cancel) return;
+            s.ul = u;
+            ulDone = true;
         } catch (Exception e) {
-            dlLine = "خطا: " + e.getMessage();
-            push();
+            if (!cancel) {
+                // a failed download means the server is not usable: skip the upload
+                if (!dlDone) s.dl = -2;
+                if (!ulDone) s.ul = -2;
+                dlDone = true;
+                ulDone = true;
+            }
         } finally {
             if (p != null) p.destroyForcibly();
+            proc = null;
             if (cfg != null) cfg.delete();
             if (log != null) log.delete();
-            listener.onDone();
+            if (cancel) { // unfinished values must not look like results
+                if (!dlDone) s.dl = -1;
+                if (!ulDone) s.ul = -1;
+            }
+            progress.update();
         }
     }
 
     private HttpURLConnection open(String url, int port) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url)
                 .openConnection(new Proxy(Proxy.Type.SOCKS, new InetSocketAddress("127.0.0.1", port)));
-        c.setConnectTimeout(10000);
-        c.setReadTimeout(20000);
+        c.setConnectTimeout(8000);
+        c.setReadTimeout(10000);
         c.setRequestProperty("User-Agent", "Mozilla/5.0");
         c.setRequestProperty("Accept-Encoding", "identity");
         return c;
     }
 
-    private String download(int port, long bytes) throws Exception {
+    private double download(int port, long bytes, Store.Server s) throws Exception {
         HttpURLConnection c = open("https://speed.cloudflare.com/__down?bytes=" + bytes, port);
         try (InputStream in = c.getInputStream()) {
             byte[] buf = new byte[65536];
@@ -133,19 +135,18 @@ final class SpeedTest {
                 long now = SystemClock.elapsedRealtime();
                 if (now - lastUi > 300) {
                     lastUi = now;
-                    dlLine = String.format(Locale.US, "%.1f Mbps …", got * 8.0 / ((now - t0) / 1000.0) / 1e6);
-                    push();
+                    s.dl = got * 8.0 / ((now - t0) / 1000.0) / 1e6; // live value
+                    progress.update();
                 }
             }
-            if (cancel) return "لغو شد";
             double sec = Math.max(0.001, (SystemClock.elapsedRealtime() - t0) / 1000.0);
-            return fmt(got * 8.0 / sec / 1e6, sec);
+            return got * 8.0 / sec / 1e6;
         } finally {
             c.disconnect();
         }
     }
 
-    private String upload(int port, long bytes) throws Exception {
+    private double upload(int port, long bytes, Store.Server s) throws Exception {
         HttpURLConnection c = open("https://speed.cloudflare.com/__up", port);
         c.setDoOutput(true);
         c.setRequestMethod("POST");
@@ -164,17 +165,17 @@ final class SpeedTest {
                 long now = SystemClock.elapsedRealtime();
                 if (now - lastUi > 300) {
                     lastUi = now;
-                    ulLine = String.format(Locale.US, "%.1f Mbps …", sent * 8.0 / ((now - t0) / 1000.0) / 1e6);
-                    push();
+                    s.ul = sent * 8.0 / ((now - t0) / 1000.0) / 1e6; // live value
+                    progress.update();
                 }
             }
-            if (cancel) return "لغو شد";
+            if (cancel) return -1;
             o.flush();
             o.close();
             int code = c.getResponseCode(); // returns when the server has received everything
             double sec = Math.max(0.001, (SystemClock.elapsedRealtime() - t0) / 1000.0);
-            if (code / 100 != 2) return "خطا: HTTP " + code;
-            return fmt(bytes * 8.0 / sec / 1e6, sec);
+            if (code / 100 != 2) throw new Exception("HTTP " + code);
+            return bytes * 8.0 / sec / 1e6;
         } finally {
             c.disconnect();
         }

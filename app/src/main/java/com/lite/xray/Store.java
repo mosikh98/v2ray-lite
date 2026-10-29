@@ -19,6 +19,8 @@ final class Store {
         String id, name, link, group = "";
         /** ms; -1 = untested, -2 = failed, -3 = testing */
         volatile long tcp = -1, icmp = -1, real = -1;
+        /** Mbps (>= 0); -1 = untested, -2 = failed, -3 = testing */
+        volatile double dl = -1, ul = -1;
     }
 
     static final class Sub {
